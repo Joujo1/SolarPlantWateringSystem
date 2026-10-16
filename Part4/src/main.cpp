@@ -12,6 +12,10 @@
 
 const int NUM_CHANNELS = 3;
 
+// Wie viele Kanäle aktiv auf Feuchte geprüft/bewässert werden (ab Kanal 0).
+// Vorerst nur Plant 1 -> 1. Zum Aktivieren aller Pflanzen auf NUM_CHANNELS setzen.
+const int ACTIVE_CHANNELS = 1;
+
 int soilPins[NUM_CHANNELS] = {A0, A1, A2};
 
 int pumpPins[NUM_CHANNELS] = {2, 3, 4};
@@ -81,7 +85,7 @@ void loop() {
     display.drawWifi(wifiOk);
   }
 
-  for (int i = 0; i < NUM_CHANNELS; i++) {
+  for (int i = 0; i < ACTIVE_CHANNELS; i++) {
     bool needsWater = waterPumpCtrl.needsWater(soilPins[i]);
 
     if (needsWater != wateringNow[i]) {
