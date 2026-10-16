@@ -6,107 +6,145 @@
 #include <BlynkSimpleWifi.h>
 #include "wifi_secrets.h"
 
-#include <Arduino.h>
-#include "waterpumpctrl.h"
+#include "config.h"
 #include "display.h"
+#include "plant.h"
 
-const int NUM_CHANNELS = 3;
+static_assert(config::PLANT_COUNT >= 1, "the app controls Plant 1, config::PLANTS needs an entry");
+static_assert(config::PLANT_COUNT <= Display::MAX_PLANTS, "the display has no row for more plants");
 
-int soilPins[NUM_CHANNELS] = {A0, A1, A2};
+Plant plants[config::PLANT_COUNT];
+Display display;
 
-int pumpPins[NUM_CHANNELS] = {2, 3, 4};
+// Returns true once every intervalMs; lastMs keeps the time of the last hit.
+bool intervalElapsed(unsigned long& lastMs, unsigned long intervalMs) {
+  unsigned long now = millis();
+  if (now - lastMs < intervalMs) return false;
+  lastMs = now;
+  return true;
+}
 
+// Runs one watering burst and shows it on the display.
+void waterPlant(int index) {
+  Plant& plant = plants[index];
+  Serial.print(plant.name());
+  Serial.print(": watering for ");
+  Serial.print(plant.pumpMs());
+  Serial.println(" ms");
 
+  display.showPlant(index, true);
+  plant.pumpOn();
+  display.rain(plant.pumpMs());
+  plant.pumpOff();
+  display.showPlant(index, false);
+}
 
-const int PUMP_ON_MS = 1000;
+// --- Blynk app (controls Plant 1) ---
 
-// Remembers whether each plant was watering last loop, so we only redraw the
-// display (and log) when something actually changes.
-bool wateringNow[NUM_CHANNELS] = {false, false, false};
+// Show the active values on the sliders. App changes last until the next reboot,
+// then config.h applies again.
+BLYNK_CONNECTED() {
+  Blynk.virtualWrite(VPIN_DRY_THRESHOLD, plants[0].dryThreshold());
+  Blynk.virtualWrite(VPIN_PUMP_MS, plants[0].pumpMs());
+  Blynk.virtualWrite(VPIN_AIR_CUTOFF, plants[0].airCutoff());
+}
 
-int lastSend = 0;
+BLYNK_WRITE(VPIN_PUMP_BUTTON) {
+  if (param.asInt()) waterPlant(0);
+}
 
-WaterPumpCtrl::waterPumpCtrl waterPumpCtrl;
-DisplayCtrl::tftDisplay display;
+BLYNK_WRITE(VPIN_PUMP2_BUTTON) {
+  if (!param.asInt()) return;
+  if (config::PLANT_COUNT < 2) {
+    Serial.println("App: Plant 2 is not configured in config.h, ignoring button");
+    return;
+  }
+  waterPlant(1);
+}
+
+BLYNK_WRITE(VPIN_DRY_THRESHOLD) {
+  int applied = plants[0].setDryThreshold(param.asInt());
+  Blynk.virtualWrite(VPIN_DRY_THRESHOLD, applied);  // show the clamped value in the app
+  Serial.print("App: dry threshold set to ");
+  Serial.println(applied);
+}
+
+BLYNK_WRITE(VPIN_AIR_CUTOFF) {
+  int applied = plants[0].setAirCutoff(param.asInt());
+  Blynk.virtualWrite(VPIN_AIR_CUTOFF, applied);  // show the clamped value in the app
+  Serial.print("App: air cutoff set to ");
+  Serial.println(applied);
+}
+
+BLYNK_WRITE(VPIN_PUMP_MS) {
+  unsigned long applied = plants[0].setPumpMs(param.asLong());
+  Blynk.virtualWrite(VPIN_PUMP_MS, applied);  // show the clamped value in the app
+  Serial.print("App: pump time set to ");
+  Serial.print(applied);
+  Serial.println(" ms");
+}
+
+// --- Loop steps ---
+
+void updateWifiIcon() {
+  static bool shownConnected = false;
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  if (connected == shownConnected) return;
+  shownConnected = connected;
+  display.drawWifi(connected);
+}
+
+void waterPlantsThatNeedIt() {
+  for (int i = 0; i < config::PLANT_COUNT; i++) {
+    if (!plants[i].shouldWaterNow(millis())) continue;
+    waterPlant(i);
+    if (plants[i].hourlyCapReached()) {
+      Serial.print(plants[i].name());
+      Serial.println(": hourly watering cap reached, pausing");
+    }
+  }
+}
+
+void printRawReadings() {
+  static unsigned long lastMs = 0;
+  if (!intervalElapsed(lastMs, config::RAW_PRINT_INTERVAL_MS)) return;
+  for (int i = 0; i < config::PLANT_COUNT; i++) {
+    Serial.print(plants[i].name());
+    Serial.print(" raw: ");
+    Serial.println(plants[i].readRaw());
+  }
+}
+
+void sendMoistureToApp() {
+  static unsigned long lastMs = 0;
+  if (!intervalElapsed(lastMs, config::BLYNK_SEND_INTERVAL_MS)) return;
+  int percent = plants[0].moisturePercent();
+  Blynk.virtualWrite(VPIN_MOISTURE, percent);
+  Serial.print(plants[0].name());
+  Serial.print(" moisture: ");
+  Serial.print(percent);
+  Serial.println(" %");
+}
 
 void setup() {
   Serial.begin(9600);
 
-  for (int i = 0; i < NUM_CHANNELS; i++) {
-    pinMode(soilPins[i], INPUT_PULLUP);
-    pinMode(pumpPins[i], OUTPUT);
-    digitalWrite(pumpPins[i], HIGH);
-  }
-
   display.begin();
-  display.showChannel(0, false);
-
-  Blynk.begin(BLYNK_AUTH_TOKEN, SSID, PASSWORD);
-  Serial.println("Blynk verbunden.");
-
-  Serial.println("Watering system ready (button test mode).");
-}
-
-// Runs one watering cycle for a channel. For Plant 1 (channel 0) it also
-// mirrors the WATER/idle state on the display, so the Blynk button and the
-// physical button both update the screen the same way.
-void waterCycle(int channel){
-    if (channel == 0) {
-      display.showChannel(0, true);        // show "WATER" while it runs
-      waterPumpCtrl.pumpOn(pumpPins[0]);
-      display.rain(PUMP_ON_MS);            // ~1s of rain while the pump is on
-      waterPumpCtrl.pumpOff(pumpPins[0]);
-      display.showChannel(0, false);       // back to "idle"
-    }else {
-      waterPumpCtrl.runPump(pumpPins[channel], PUMP_ON_MS);
+  for (int i = 0; i < config::PLANT_COUNT; i++) {
+    plants[i].begin(config::PLANTS[i]);
+    display.showPlant(i, false);
   }
-}
 
-BLYNK_WRITE(V0) {
-  int on = param.asInt();
-  if (on) waterCycle(0);
-  else    waterPumpCtrl.pumpOff(pumpPins[0]);
-  Serial.println(on ? "Blynk: Pumpe AN" : "Blynk: Pumpe AUS");
+  WiFi.begin(SSID, PASSWORD);
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  Serial.println("Watering system started, connecting to Blynk in the background");
 }
-
 
 void loop() {
   Blynk.run();
-
-  // Show/refresh the wifi symbol when the connection state changes.
-  static bool wifiShown = false;
-  bool wifiOk = (WiFi.status() == WL_CONNECTED);
-  if (wifiOk != wifiShown) {
-    wifiShown = wifiOk;
-    display.drawWifi(wifiOk);
-  }
-
-  for (int i = 0; i < NUM_CHANNELS; i++) {
-    bool needsWater = waterPumpCtrl.needsWater(soilPins[i]);
-
-    if (needsWater != wateringNow[i]) {
-      wateringNow[i] = needsWater;
-      // (the display for Plant 1 is now handled inside waterCycle)
-      Serial.print("Plant ");
-      Serial.print(i + 1);
-      Serial.println(needsWater ? ": needs water -> pump ON" : ": idle");
-    }
-
-
-    // While this plant needs water, run its pump.
-    if (needsWater) waterCycle(i);
-    //Air = 480
-    //Trocken = 380
-    //Genug = 240
-    //Wasser = 160
-  delay(1000);
-  };
-
-  if (millis() - lastSend > 5000) {
-    lastSend = millis();
-    int reading = analogRead(A1);
-    int percent = constrain(map(reading, 480, 160, 0, 100), 0, 100);
-    Blynk.virtualWrite(V1, percent);
-    Serial.print("Feuchte %: "); Serial.println(percent);
-  }
+  updateWifiIcon();
+  waterPlantsThatNeedIt();
+  printRawReadings();
+  sendMoistureToApp();
+  delay(config::LOOP_DELAY_MS);
 }

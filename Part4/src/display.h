@@ -1,16 +1,19 @@
+#pragma once
+
 #include <Arduino.h>
 
-namespace DisplayCtrl
-{
-    class tftDisplay
-    {
-    public:
-        void begin();
+// The 320x240 ST7789 status screen.
+class Display {
+public:
+  static constexpr int MAX_PLANTS = 3;   // status rows that fit on the screen
 
-        void showChannel(int channel, bool watering);
+  void begin();
 
-        void rain(int durationMs);
+  // Shows "watering" or "idle" for a plant (0-based index).
+  void showPlant(int index, bool watering);
 
-        void drawWifi(bool connected);
-    };
-}
+  // Animates rain for durationMs. Blocks until done.
+  void rain(unsigned long durationMs);
+
+  void drawWifi(bool connected);
+};

@@ -1,26 +1,26 @@
 #include "display.h"
+#include "config.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
 
-using namespace DisplayCtrl;
-
-#define TFT_CS 10   // display "CS"
-#define TFT_DC 8    // display "D/C"
-#define TFT_RST 9   // display "RST"
-#define TFT_MOSI 11 // display "MOSI"
-#define TFT_SCLK 13 // display "SCK"
-
-static Adafruit_ST7789 tft =
-    Adafruit_ST7789(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+static Adafruit_ST7789 tft = Adafruit_ST7789(
+    config::TFT_CS, config::TFT_DC, config::TFT_MOSI, config::TFT_SCLK, config::TFT_RST);
 
 static const int SCREEN_W = 320;
-static const int ROW_TOP = 55;
+static const int ROW_TOP = 45;   // first plant row, just below the title bar
+static const int ROW_H = 30;     // Display::MAX_PLANTS rows end at y = 135
 
 static const int RAIN_N = 5;
-static const int RAIN_X0 = 120, RAIN_X1 = 198;
-static const int RAIN_Y0 = 92, RAIN_Y1 = 127;
+static const int RAIN_X0 = 135, RAIN_X1 = 185;
+static const int RAIN_Y0 = 143, RAIN_Y1 = 170;   // between the rows and the plant
 static int rainX[RAIN_N], rainY[RAIN_N];
+
+static const float PLANT_SCALE = 0.6;   // full size is about 99 px tall
+static const int PLANT_BASE_Y = 236;
+
+// Scales a drawing offset or radius by PLANT_SCALE.
+static int s(int v) { return (int)(v * PLANT_SCALE + 0.5); }
 
 // Draws a little potted flower. (cx, baseY) is the centre of the pot's base.
 static void drawPlant(int cx, int baseY) {
@@ -32,26 +32,26 @@ static void drawPlant(int cx, int baseY) {
   uint16_t petal = tft.color565(235, 95, 140);
   uint16_t middle = tft.color565(250, 205, 70);
 
-  int potTopY = baseY - 36;
+  int potTopY = baseY - s(36);
 
-  tft.fillTriangle(cx - 30, potTopY, cx + 30, potTopY, cx + 21, baseY, terracotta);
-  tft.fillTriangle(cx - 30, potTopY, cx + 21, baseY, cx - 21, baseY, terracotta);
-  tft.fillRoundRect(cx - 36, potTopY - 13, 72, 14, 4, rim);
-  tft.fillRect(cx - 30, potTopY - 11, 60, 5, soil);
+  tft.fillTriangle(cx - s(30), potTopY, cx + s(30), potTopY, cx + s(21), baseY, terracotta);
+  tft.fillTriangle(cx - s(30), potTopY, cx + s(21), baseY, cx - s(21), baseY, terracotta);
+  tft.fillRoundRect(cx - s(36), potTopY - s(13), s(72), s(14), s(4), rim);
+  tft.fillRect(cx - s(30), potTopY - s(11), s(60), s(5), soil);
 
-  tft.fillRect(cx - 3, potTopY - 42, 6, 46, green);
+  tft.fillRect(cx - s(3), potTopY - s(42), s(6), s(46), green);
 
-  tft.fillCircle(cx - 15, potTopY - 22, 10, green);
-  tft.fillCircle(cx + 15, potTopY - 30, 10, greenDark);
+  tft.fillCircle(cx - s(15), potTopY - s(22), s(10), green);
+  tft.fillCircle(cx + s(15), potTopY - s(30), s(10), greenDark);
 
-  int fy = potTopY - 46;
-  tft.fillCircle(cx, fy - 11, 6, petal);
-  tft.fillCircle(cx + 9, fy - 5, 6, petal);
-  tft.fillCircle(cx + 9, fy + 5, 6, petal);
-  tft.fillCircle(cx, fy + 11, 6, petal);
-  tft.fillCircle(cx - 9, fy + 5, 6, petal);
-  tft.fillCircle(cx - 9, fy - 5, 6, petal);
-  tft.fillCircle(cx, fy, 6, middle);
+  int fy = potTopY - s(46);
+  tft.fillCircle(cx, fy - s(11), s(6), petal);
+  tft.fillCircle(cx + s(9), fy - s(5), s(6), petal);
+  tft.fillCircle(cx + s(9), fy + s(5), s(6), petal);
+  tft.fillCircle(cx, fy + s(11), s(6), petal);
+  tft.fillCircle(cx - s(9), fy + s(5), s(6), petal);
+  tft.fillCircle(cx - s(9), fy - s(5), s(6), petal);
+  tft.fillCircle(cx, fy, s(6), middle);
 }
 
 // Draws the upper part of an arc (used for the wifi "waves").
@@ -66,7 +66,7 @@ static void drawArc(int cx, int cy, int r, uint16_t color) {
 
 // Small wifi symbol in the top-right of the title bar: drawn when connected,
 // erased (left blank) when not.
-void tftDisplay::drawWifi(bool connected) {
+void Display::drawWifi(bool connected) {
   const int cx = 300, dotY = 30;
   tft.fillRect(282, 4, 36, 32, ST77XX_BLUE); // clear the icon area (title-bar bg)
   if (!connected) return;
@@ -78,7 +78,7 @@ void tftDisplay::drawWifi(bool connected) {
   drawArc(cx, dotY, 17, col);
 }
 
-void tftDisplay::begin() {
+void Display::begin() {
   tft.init(240, 320);
   tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
@@ -90,19 +90,20 @@ void tftDisplay::begin() {
   tft.setCursor(10, 8);
   tft.print("WASSERKANONE");
 
-  drawPlant(160, 234);
+  drawPlant(SCREEN_W / 2, PLANT_BASE_Y);
 }
 
-void tftDisplay::showChannel(int channel, bool watering) {
-  int y = ROW_TOP;
+void Display::showPlant(int index, bool watering) {
+  if (index < 0 || index >= MAX_PLANTS) return;
+  int y = ROW_TOP + index * ROW_H;
 
-  tft.fillRect(0, y, SCREEN_W, 36, ST77XX_BLACK);
+  tft.fillRect(0, y, SCREEN_W, ROW_H, ST77XX_BLACK);
 
   tft.setTextSize(3);
-  tft.setCursor(10, y + 8);
+  tft.setCursor(10, y + 3);
   tft.setTextColor(ST77XX_WHITE);
   tft.print("BLATT ");
-  tft.print(channel + 1);
+  tft.print(index + 1);
   tft.print(": ");
   if (watering) {
     tft.setTextColor(ST77XX_CYAN);
@@ -113,11 +114,11 @@ void tftDisplay::showChannel(int channel, bool watering) {
   }
 }
 
-void tftDisplay::rain(int durationMs) {
+void Display::rain(unsigned long durationMs) {
   uint16_t drop = tft.color565(110, 190, 255);
 
   unsigned long start = millis();
-  while (millis() - start < (unsigned long)durationMs) {
+  while (millis() - start < durationMs) {
     for (int i = 0; i < RAIN_N; i++) {
       rainX[i] = RAIN_X0 + random(RAIN_X1 - RAIN_X0);
       rainY[i] = RAIN_Y0 + random(RAIN_Y1 - RAIN_Y0);
